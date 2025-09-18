@@ -21,6 +21,48 @@ env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
 NOTE_TEMPLATE = env.get_template("lm-studio-template.md")
 
 
+def parse_card_metadata(description: str) -> dict[str, str] | None:
+    """Extract bibliographic details from a Trello card description."""
+
+    if not description:
+        return None
+
+    normalized_header = "title/author/publisher/date/ibsn"
+    alt_header = "title/author/publisher/date"
+
+    lines = [line.strip() for line in description.splitlines()]
+    header_index = None
+    for idx, line in enumerate(lines):
+        cleaned = line.lstrip("#").strip().lower()
+        if cleaned in {normalized_header, alt_header}:
+            header_index = idx
+            break
+
+    if header_index is None:
+        return None
+
+    fields = ["title", "author", "publisher", "date", "isbn"]
+    values: dict[str, str] = {}
+
+    remaining = iter(lines[header_index + 1 :])
+    for field in fields:
+        for line in remaining:
+            if not line:
+                continue
+            if line.startswith("#"):
+                # Reached a new section before capturing all details.
+                return None
+            values[field] = line
+            break
+        else:
+            break
+
+    if len(values) < len(fields):
+        return None
+
+    return values
+
+
 def slugify(value: str) -> str:
     """Return a filesystem friendly slug for *value*.
 
@@ -56,12 +98,21 @@ def convert(json_file: Path, out_dir: Path) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     count = 0
 
+    card_metadata: dict[str, dict[str, str]] = {}
+    for card in data.get("cards", []):
+        metadata = parse_card_metadata(card.get("desc", ""))
+        if metadata:
+            card_metadata[card.get("id", "")] = metadata
+
     for action in data.get("actions", []):
         if action.get("type") != "commentCard":
             continue
 
-        card_name = action["data"]["card"]["name"]
-        comment = action["data"]["text"]
+        data_section = action.get("data", {})
+        card_info = data_section.get("card", {})
+
+        card_name = card_info.get("name", "")
+        comment = data_section.get("text", "")
         date = action.get("date", "")
         comment_id = action.get("id", "")
 
@@ -69,8 +120,13 @@ def convert(json_file: Path, out_dir: Path) -> int:
         filename = f"{date[:10]}_{card_slug}_{comment_id}.md"
         filepath = out_dir / filename
 
+        metadata = card_metadata.get(card_info.get("id", ""))
+
         content = NOTE_TEMPLATE.render(
-            card_name=card_name, note=comment, date=date
+            card_name=card_name,
+            note=comment,
+            date=date,
+            source_details=metadata,
         )
         filepath.write_text(content, encoding="utf-8")
 
