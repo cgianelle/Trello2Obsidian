@@ -36,7 +36,12 @@ tags: []
 
 ## SECTION 5: SOURCE(S) & FURTHER READING (Optional)
 
+{% if source_details %}
+*   {{ source_details.author }}{% if source_details.date %} ({{ source_details.date }}){% endif %}. *{{ source_details.title }}*. {{ source_details.publisher }}{% if source_details.isbn %}. ISBN: {{ source_details.isbn }}{% endif %}.
+{% else %}
 *   Author, A. (Year). *Title of Book/Article*. Publisher.
+{% endif %}
+
 *   [Link to relevant website or resource]
 
 ---
