@@ -33,7 +33,8 @@ Edit this file to adjust section headings or formatting.
 ## Enhancing notes with LM Studio
 
 After generating Markdown notes you can expand their "Key Concepts" and
-"Evidence" sections using a local LM Studio instance:
+"Evidence" sections using a local LM Studio instance. The script also
+refreshes the front-matter tag list so it reflects the enhanced content:
 
 ```bash
 python enhance_note.py path/to/note.md enhanced-notes/

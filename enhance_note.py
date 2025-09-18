@@ -23,6 +23,14 @@ SECTION_INTRO = "## SECTION 1: INTRODUCTION/OVERVIEW"
 SECTION_CONCEPTS = "## SECTION 2: KEY CONCEPTS/DEFINITIONS"
 SECTION_EVIDENCE = "## SECTION 3: EVIDENCE/SUPPORTING DETAILS"
 SECTION_HEADING_PREFIX = "## SECTION "
+TAGS_PREFIX = "tags:"
+
+
+@dataclass
+class ModelResponse:
+    tags: list[str]
+    section2: str
+    section3: str
 
 
 @dataclass
@@ -76,7 +84,9 @@ def build_prompt(introduction: str) -> list[dict[str, str]]:
     system_prompt = (
         "You expand study notes. Given the introduction section of a note, "
         "write concise, information-rich content for the Key Concepts and "
-        "Evidence sections of the same note. Follow Markdown requirements."
+        "Evidence sections of the same note. You also suggest relevant tags. "
+        "ALWAYS respond with valid minified JSON using this schema: "
+        "{\"tags\": [tag_strings], \"section2\": \"markdown\", \"section3\": \"markdown\"}."
     )
     user_prompt = """You are provided the introduction section of a note:
 """
@@ -85,24 +95,14 @@ def build_prompt(introduction: str) -> list[dict[str, str]]:
 {introduction}
 </INTRODUCTION>
 
-Use only the information above and widely accepted background
-knowledge to complete the following sections in Markdown:
+Using only the information above and widely accepted background knowledge:
+- Provide 3 to 6 short, topical tags (single or hyphenated words) that reflect the introduction.
+- Draft the Key Concepts and Evidence sections using Markdown and keep the headings exactly as shown below.
+- Each section must contain at least three well-developed bullet points.
+- Do not add extra headings or commentary.
 
-## SECTION 2: KEY CONCEPTS/DEFINITIONS
-*   **Concept 1:** ...
-*   **Concept 2:** ...
-*   **Concept 3:** ...
-
-## SECTION 3: EVIDENCE/SUPPORTING DETAILS
-*   Detail 1: ...
-*   Detail 2: ...
-*   Detail 3: ...
-
-Guidelines:
-- Preserve the exact headings shown above.
-- Provide informative explanations in full sentences.
-- Prefer bullet lists with at least three well-developed items per section.
-- Do not add any extra sections or commentary outside of the two headings.
+Return the result as minified JSON in this form (without extra prose):
+{{"tags":["tag1","tag2"],"section2":"## SECTION 2: KEY CONCEPTS/DEFINITIONS\n*   ...","section3":"## SECTION 3: EVIDENCE/SUPPORTING DETAILS\n*   ..."}}
 """
 
     return [
@@ -142,6 +142,34 @@ def call_chat_completion(
         raise RuntimeError(f"Unexpected response schema: {data!r}") from exc
 
 
+def parse_model_response(raw: str) -> ModelResponse:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Model response was not valid JSON.") from exc
+
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Model response JSON must be an object, got {type(payload).__name__}.")
+
+    try:
+        tags_raw = payload["tags"]
+        section2 = payload["section2"]
+        section3 = payload["section3"]
+    except KeyError as exc:
+        raise RuntimeError(f"Model response missing key: {exc.args[0]}") from exc
+
+    if not isinstance(tags_raw, list) or not all(isinstance(tag, str) for tag in tags_raw):
+        raise RuntimeError("Model response 'tags' must be a list of strings.")
+    if not isinstance(section2, str) or not isinstance(section3, str):
+        raise RuntimeError("Model response sections must be strings.")
+
+    tags = [tag.strip() for tag in tags_raw if tag.strip()]
+    if not tags:
+        raise RuntimeError("Model did not provide any usable tags.")
+
+    return ModelResponse(tags=tags, section2=section2.strip(), section3=section3.strip())
+
+
 def ensure_required_headings(text: str) -> None:
     missing = [
         heading
@@ -152,6 +180,33 @@ def ensure_required_headings(text: str) -> None:
         raise RuntimeError(
             "LLM response missing required headings: " + ", ".join(missing)
         )
+
+
+def format_tags(tags: Iterable[str]) -> str:
+    cleaned = []
+    seen = set()
+    for tag in tags:
+        normalized = tag.strip()
+        if not normalized:
+            continue
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(normalized)
+    if not cleaned:
+        raise RuntimeError("No valid tags to write.")
+    return json.dumps(cleaned, ensure_ascii=False)
+
+
+def replace_tags(text: str, tags: Iterable[str]) -> str:
+    lines = text.splitlines()
+    for idx, line in enumerate(lines):
+        if line.strip().startswith(TAGS_PREFIX):
+            prefix, _, _ = line.partition(TAGS_PREFIX)
+            lines[idx] = f"{prefix}{TAGS_PREFIX} {format_tags(tags)}"
+            return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+    raise NoteStructureError("Could not locate 'tags:' line in note front matter.")
 
 
 def merge_sections(original: str, replacement: str) -> str:
@@ -190,7 +245,10 @@ def enhance_note(
         temperature=temperature,
     )
 
-    enhanced = merge_sections(text, completion)
+    model_response = parse_model_response(completion)
+    sections_markdown = f"{model_response.section2}\n\n{model_response.section3}".strip()
+    enhanced = merge_sections(text, sections_markdown)
+    enhanced = replace_tags(enhanced, model_response.tags)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     destination = output_dir / note_path.name
