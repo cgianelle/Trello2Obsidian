@@ -202,9 +202,12 @@ def format_tags(tags: Iterable[str]) -> str:
 def replace_tags(text: str, tags: Iterable[str]) -> str:
     lines = text.splitlines()
     for idx, line in enumerate(lines):
-        if line.strip().startswith(TAGS_PREFIX):
-            prefix, _, _ = line.partition(TAGS_PREFIX)
-            lines[idx] = f"{prefix}{TAGS_PREFIX} {format_tags(tags)}"
+        stripped = line.lstrip()
+        if stripped.lower().startswith(TAGS_PREFIX):
+            indent = line[: len(line) - len(stripped)]
+            key, _, _ = stripped.partition(":")
+            key = key or TAGS_PREFIX[:-1]
+            lines[idx] = f"{indent}{key}: {format_tags(tags)}"
             return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
     raise NoteStructureError("Could not locate 'tags:' line in note front matter.")
 
