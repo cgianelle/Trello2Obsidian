@@ -142,11 +142,55 @@ def call_chat_completion(
         raise RuntimeError(f"Unexpected response schema: {data!r}") from exc
 
 
+def extract_json_object(text: str) -> str | None:
+    """Return the first balanced JSON object found in *text*, if any."""
+
+    start = text.find("{")
+    if start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escape = False
+    for idx in range(start, len(text)):
+        char = text[idx]
+        if in_string:
+            if escape:
+                escape = False
+                continue
+            if char == "\\":
+                escape = True
+                continue
+            if char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+            continue
+        if char == "{":
+            depth += 1
+            continue
+        if char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : idx + 1]
+
+    return None
+
+
 def parse_model_response(raw: str) -> ModelResponse:
+    candidate = raw.strip()
     try:
-        payload = json.loads(raw)
+        payload = json.loads(candidate)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("Model response was not valid JSON.") from exc
+        extracted = extract_json_object(candidate)
+        if not extracted:
+            raise RuntimeError("Model response was not valid JSON.") from exc
+        try:
+            payload = json.loads(extracted)
+        except json.JSONDecodeError as exc2:
+            raise RuntimeError("Model response was not valid JSON.") from exc2
 
     if not isinstance(payload, dict):
         raise RuntimeError(f"Model response JSON must be an object, got {type(payload).__name__}.")
